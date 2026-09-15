@@ -1,0 +1,177 @@
+# ============================================================
+# ContextAI - Persistent Contextual AI Assistant
+# Git Ignore
+# ============================================================
+
+# ------------------------------------------------------------
+# Environment & Secrets
+# ------------------------------------------------------------
+
+.env
+.env.*
+!.env.example
+
+# Backend environment
+backend/.env
+
+# Local environment files
+*.env
+*.env.local
+*.env.development
+*.env.production
+*.env.test
+
+# OAuth / credentials
+credentials.json
+client_secret*.json
+google-credentials*.json
+token.json
+*.pem
+*.key
+
+# ------------------------------------------------------------
+# Python
+# ------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Poetry
+.poetry/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ------------------------------------------------------------
+# FastAPI / Local Runtime
+# ------------------------------------------------------------
+
+*.log
+logs/
+
+# Local SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Local application data
+backend/data/*
+!backend/data/.gitkeep
+
+# ------------------------------------------------------------
+# Node / Next.js
+# ------------------------------------------------------------
+
+node_modules/
+.next/
+out/
+dist/
+build/
+
+# Next.js cache
+.next/cache/
+
+# Vercel
+.vercel/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ------------------------------------------------------------
+# OS Files
+# ------------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Windows temporary files
+*.tmp
+*.temp
+
+# ------------------------------------------------------------
+# IDE / Editor
+# ------------------------------------------------------------
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+.idea/
+*.iml
+
+# Visual Studio
+.vs/
+
+# ------------------------------------------------------------
+# Testing / Reports
+# ------------------------------------------------------------
+
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Local data
+backend/data/*
+!backend/data/.gitkeep
+
+# ------------------------------------------------------------
+# Temporary / Generated Files
+# ------------------------------------------------------------
+
+tmp/
+temp/
+*.bak
+*.swp
+*.swo
+
+# ------------------------------------------------------------
+# Secrets / Private Files
+# ------------------------------------------------------------
+
+secrets/
+private/
+credentials/
+*.secret
+*.secret.json
+
+# ------------------------------------------------------------
+# Docker local overrides
+# ------------------------------------------------------------
+
+docker-compose.override.yml
+
+# ------------------------------------------------------------
+# OS / Misc
+# ------------------------------------------------------------
+
+.DS_Store

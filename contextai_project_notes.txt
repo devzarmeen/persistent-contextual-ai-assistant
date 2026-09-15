@@ -1,0 +1,69 @@
+﻿ContextAI Project Notes
+
+Project Name:
+Persistent Contextual AI Assistant
+
+Project Goal:
+ContextAI is an AI assistant that maintains persistent context across conversations. It combines long-term memory, document retrieval, external tools, and human verification to provide contextual and reliable assistance.
+
+Core Features:
+1. Persistent long-term memory
+2. Semantic memory search using PostgreSQL and pgvector
+3. Document upload and retrieval
+4. RAG-based question answering
+5. Google Calendar integration
+6. Gmail integration
+7. Google Drive integration
+8. Tool-based agent workflow
+9. Human approval before external actions
+10. Memory conflict detection and resolution
+
+Technology Stack:
+Frontend:
+- Next.js
+- React
+- TypeScript
+- Tailwind CSS
+
+Backend:
+- FastAPI
+- Python
+- SQLModel
+- PostgreSQL
+- pgvector
+
+AI:
+- Gemini
+- Agent-based decision and tool execution
+
+Authentication:
+- JWT authentication
+- Google OAuth for Google integrations
+
+Memory System:
+ContextAI stores important information as long-term memories. Memories can include facts, preferences, decisions, tasks, deadlines, people, projects, and conversation information.
+
+Document Retrieval:
+Uploaded documents are processed into searchable chunks. Relevant chunks are retrieved when a user asks a question related to the document. The assistant should use retrieved document information when generating an answer.
+
+Verification:
+External actions such as sending an email or creating a calendar event require human approval before execution.
+
+Example Verification Flow:
+User requests an external action.
+The agent prepares the action.
+The action receives PENDING status.
+The user reviews and approves the action.
+The system executes the action.
+The action becomes VERIFIED after successful execution.
+
+Example Project Memory:
+The user prefers step-by-step implementation with complete copy-paste-ready code.
+
+Example Questions:
+- What is ContextAI?
+- What technologies are used in ContextAI?
+- How does the memory system work?
+- Which actions require human approval?
+- What is the purpose of document retrieval?
+- What database does ContextAI use?

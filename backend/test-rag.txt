@@ -1,0 +1,9 @@
+﻿# Persistent Contextual AI Assistant
+
+The Persistent Contextual AI Assistant is an AI system designed to remember useful user context across conversations.
+
+The project uses FastAPI for the backend, PostgreSQL with pgvector for persistent storage and semantic search, and Gemini for AI responses and embeddings.
+
+The assistant supports long-term memory, document retrieval, contextual chat, and future integrations with Gmail and Google Calendar.
+
+The main goal is to reduce context loss and prevent users from repeatedly explaining the same information to an AI assistant.
