@@ -102,8 +102,9 @@ def chat(
             user_id=user.id,
             user_message=request.message,
             conversation_history=previous_messages,
+            attached_document_id=request.document_id,
         )
-
+        
         raw_agent_metadata = agent_result.get(
             "agent"
         )

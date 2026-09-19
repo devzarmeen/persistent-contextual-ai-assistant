@@ -99,8 +99,10 @@ USER MESSAGE:
         return []
 
     try:
-        parsed = MemoryExtractionResponse.model_validate_json(
-            response.text
+        parsed = (
+            MemoryExtractionResponse.model_validate_json(
+                response.text
+            )
         )
 
         return parsed.memories
@@ -187,7 +189,7 @@ def _increment_confirmation(
     memory.confirmation_count += 1
 
     score = calculate_confidence_score(
-        base_confidence=memory.confidence,
+        importance=memory.importance,
         source_type=memory.source_type,
         created_at=memory.created_at,
         content=memory.content,
@@ -195,8 +197,10 @@ def _increment_confirmation(
         has_conflict=False,
     )
 
-    memory.confidence = score.final_score
-    memory.updated_at = datetime.now(timezone.utc)
+    memory.confidence = score
+    memory.updated_at = datetime.now(
+        timezone.utc
+    )
 
     session.add(memory)
     session.commit()
@@ -229,12 +233,7 @@ def save_memory(
     # ========================================================
     # SOURCE METADATA
     # ========================================================
-    #
-    # The explicit function arguments remain the primary source.
-    #
-    # If the ExtractedMemory schema also carries source metadata,
-    # preserve it when the caller did not explicitly override it.
-    #
+
     extracted_source_type = getattr(
         extracted_memory,
         "source_type",
@@ -290,12 +289,8 @@ def save_memory(
     analysis = analyze_memory_candidate(
         session=session,
         user_id=user_id,
-        content=extracted_memory.content,
+        candidate=extracted_memory.content,
         memory_type=extracted_memory.memory_type,
-        confidence=extracted_memory.confidence,
-        source_type=source_type,
-        source_id=source_id,
-        embedding=embedding,
     )
 
     decision = analysis["decision"]
@@ -305,7 +300,9 @@ def save_memory(
     # ========================================================
 
     if decision == "DUPLICATE":
-        existing_memory = analysis["existing_memory"]
+        existing_memory = analysis[
+            "existing_memory"
+        ]
 
         if existing_memory is None:
             return None
@@ -342,7 +339,7 @@ def save_memory(
 
     if decision == "NEW":
         score = calculate_confidence_score(
-            base_confidence=extracted_memory.confidence,
+            importance=extracted_memory.importance,
             source_type=source_type,
             created_at=now,
             content=extracted_memory.content,
@@ -350,7 +347,8 @@ def save_memory(
             has_conflict=False,
         )
 
-        new_memory.confidence = score.final_score
+        # calculate_confidence_score returns float.
+        new_memory.confidence = score
 
         session.add(new_memory)
         session.commit()
@@ -363,13 +361,35 @@ def save_memory(
     # ========================================================
 
     if decision == "CONFLICT":
-        existing_memory = analysis["existing_memory"]
-        comparison = analysis["comparison"]
-        existing_score = analysis["existing_score"]
-        new_score = analysis["candidate_score"]
+        existing_memory = analysis[
+            "existing_memory"
+        ]
+
+        comparison = analysis[
+            "comparison"
+        ]
+
+        existing_score = analysis[
+            "existing_score"
+        ]
+
+        new_score = analysis[
+            "candidate_score"
+        ]
+
+        # ----------------------------------------------------
+        # Defensive fallback.
+        #
+        # This should normally not happen because a CONFLICT
+        # decision should contain an existing memory.
+        # ----------------------------------------------------
 
         if existing_memory is None:
-            new_memory.confidence = new_score.final_score
+            new_memory.confidence = (
+                new_score
+                if new_score is not None
+                else extracted_memory.confidence
+            )
 
             session.add(new_memory)
             session.commit()
@@ -378,15 +398,44 @@ def save_memory(
             return new_memory
 
         # ----------------------------------------------------
+        # Both scores are floats.
+        # ----------------------------------------------------
+
+        if new_score is None:
+            new_score = calculate_confidence_score(
+                importance=extracted_memory.importance,
+                source_type=source_type,
+                created_at=now,
+                content=extracted_memory.content,
+                confirmation_count=0,
+                has_conflict=True,
+            )
+
+        if existing_score is None:
+            existing_score = calculate_confidence_score(
+                importance=existing_memory.importance,
+                source_type=(
+                    existing_memory.source_type
+                ),
+                created_at=(
+                    existing_memory.created_at
+                ),
+                content=existing_memory.content,
+                confirmation_count=(
+                    existing_memory.confirmation_count
+                ),
+                has_conflict=True,
+            )
+
+        # ----------------------------------------------------
         # Persist calculated confidence on new memory.
         # ----------------------------------------------------
 
-        new_memory.confidence = new_score.final_score
+        new_memory.confidence = new_score
 
         # ----------------------------------------------------
         # WINNER SELECTION
         #
-        # Phase 10 rule:
         # The memory with the higher calculated intelligence
         # score becomes the current memory.
         #
@@ -394,13 +443,10 @@ def save_memory(
         # memory to avoid unnecessary replacement.
         # ----------------------------------------------------
 
-        if (
-            new_score.final_score
-            > existing_score.final_score
-        ):
-            winner = "NEW"
+        if new_score > existing_score:
+            winner = "NEW_MEMORY_WINS"
         else:
-            winner = "EXISTING"
+            winner = "EXISTING_MEMORY_WINS"
 
         # ----------------------------------------------------
         # Insert new memory first so the conflict record can
@@ -414,7 +460,7 @@ def save_memory(
         # NEW MEMORY WINS
         # ----------------------------------------------------
 
-        if winner == "NEW":
+        if winner == "NEW_MEMORY_WINS":
             existing_memory.is_active = False
             existing_memory.updated_at = datetime.now(
                 timezone.utc
@@ -423,24 +469,26 @@ def save_memory(
             new_memory.is_active = True
 
             reason = build_resolution_reason(
-                existing=existing_memory,
-                new_content=new_memory.content,
-                existing_score=existing_score,
-                new_score=new_score,
-                winner="NEW",
                 comparison=comparison,
+                winner="NEW_MEMORY_WINS",
+                candidate_score=new_score,
+                existing_score=existing_score,
+                candidate_source=source_type,
+                existing_source=(
+                    existing_memory.source_type
+                ),
             )
 
             create_memory_conflict(
                 session=session,
                 user_id=user_id,
-                old_memory=existing_memory,
+                existing_memory=existing_memory,
                 new_memory=new_memory,
-                winning_memory=new_memory,
                 comparison=comparison,
-                old_score=existing_score,
+                existing_score=existing_score,
                 new_score=new_score,
-                reason=reason,
+                resolution=winner,
+                resolution_reason=reason,
             )
 
         # ----------------------------------------------------
@@ -456,27 +504,33 @@ def save_memory(
             )
 
             reason = build_resolution_reason(
-                existing=existing_memory,
-                new_content=new_memory.content,
-                existing_score=existing_score,
-                new_score=new_score,
-                winner="EXISTING",
                 comparison=comparison,
+                winner="EXISTING_MEMORY_WINS",
+                candidate_score=new_score,
+                existing_score=existing_score,
+                candidate_source=source_type,
+                existing_source=(
+                    existing_memory.source_type
+                ),
             )
 
             create_memory_conflict(
                 session=session,
                 user_id=user_id,
-                old_memory=existing_memory,
+                existing_memory=existing_memory,
                 new_memory=new_memory,
-                winning_memory=existing_memory,
                 comparison=comparison,
-                old_score=existing_score,
+                existing_score=existing_score,
                 new_score=new_score,
-                reason=reason,
+                resolution=winner,
+                resolution_reason=reason,
             )
 
+        session.add(existing_memory)
+        session.add(new_memory)
+
         session.commit()
+
         session.refresh(new_memory)
 
         return new_memory
@@ -486,7 +540,7 @@ def save_memory(
     # ========================================================
 
     score = calculate_confidence_score(
-        base_confidence=extracted_memory.confidence,
+        importance=extracted_memory.importance,
         source_type=source_type,
         created_at=now,
         content=extracted_memory.content,
@@ -494,7 +548,7 @@ def save_memory(
         has_conflict=False,
     )
 
-    new_memory.confidence = score.final_score
+    new_memory.confidence = score
 
     session.add(new_memory)
     session.commit()
@@ -577,7 +631,9 @@ def search_memories(
         .limit(limit)
     )
 
-    results = session.exec(statement).all()
+    results = session.exec(
+        statement
+    ).all()
 
     return [
         (
@@ -609,7 +665,9 @@ def get_user_memories(
         .limit(limit)
     )
 
-    return list(session.exec(statement))
+    return list(
+        session.exec(statement)
+    )
 
 
 def format_memories_for_prompt(

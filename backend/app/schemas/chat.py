@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -7,6 +6,12 @@ from pydantic import BaseModel
 class ChatRequest(BaseModel):
     message: str
     conversation_id: int | None = None
+
+    # Optional document attached to the current chat message.
+    #
+    # The frontend receives this ID from the authenticated
+    # document upload endpoint and sends it with the chat request.
+    document_id: int | None = None
 
 
 class AgentMetadata(BaseModel):

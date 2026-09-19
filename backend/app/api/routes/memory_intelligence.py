@@ -160,7 +160,9 @@ def get_memory_conflict_detail(
         )
 
     return MemoryConflictDetailResponse(
-        **_conflict_to_response(conflict).model_dump(),
+        **_conflict_to_response(
+            conflict
+        ).model_dump(),
         old_memory=_memory_to_dict(
             old_memory
         ),

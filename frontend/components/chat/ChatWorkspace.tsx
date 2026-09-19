@@ -11,6 +11,7 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock3,
+  FileText,
   Mail,
   Search,
   ShieldCheck,
@@ -19,11 +20,16 @@ import {
   XCircle,
 } from "lucide-react";
 
-import ChatComposer from "./ChatComposer";
+import ChatComposer, {
+  UploadedChatDocument,
+} from "./ChatComposer";
 import ChatMessage from "./ChatMessage";
 import ConversationList from "./ConversationList";
 
-import { apiFetch } from "@/lib/api";
+import {
+  apiFetch,
+  apiUpload,
+} from "@/lib/api";
 
 import type {
   AgentMetadata,
@@ -44,16 +50,49 @@ export default function ChatWorkspace({
   initialConversationId,
   initialMessage,
 }: ChatWorkspaceProps) {
+
+  // ==========================================================
+  // CONVERSATIONS
+  // ==========================================================
+
   const [conversations, setConversations] =
     useState<Conversation[]>([]);
 
+  // ==========================================================
+  // MESSAGES
+  // ==========================================================
+
   const [messages, setMessages] =
     useState<Message[]>([]);
+
+  // ==========================================================
+  // ACTIVE CONVERSATION
+  // ==========================================================
 
   const [activeConversationId, setActiveConversationId] =
     useState<number | undefined>(
       initialConversationId,
     );
+
+  // ==========================================================
+  // ATTACHED DOCUMENT
+  // ==========================================================
+
+  /*
+   * This document remains attached to the current chat until
+   * the user starts a new chat or explicitly uploads another
+   * document.
+   *
+   * The document ID is sent to the backend with every message.
+   */
+  const [attachedDocument, setAttachedDocument] =
+    useState<UploadedChatDocument | null>(
+      null,
+    );
+
+  // ==========================================================
+  // UI STATE
+  // ==========================================================
 
   const [loadingConversations, setLoadingConversations] =
     useState(true);
@@ -70,6 +109,10 @@ export default function ChatWorkspace({
   const [agentActivity, setAgentActivity] =
     useState<AgentMetadata | null>(null);
 
+  // ==========================================================
+  // REFS
+  // ==========================================================
+
   const scrollRef =
     useRef<HTMLDivElement>(null);
 
@@ -83,6 +126,7 @@ export default function ChatWorkspace({
 
   const loadConversations =
     useCallback(async () => {
+
       const data =
         await apiFetch<Conversation[]>(
           "/api/chat/conversations",
@@ -91,6 +135,7 @@ export default function ChatWorkspace({
       setConversations(data);
 
       return data;
+
     }, []);
 
 
@@ -100,23 +145,31 @@ export default function ChatWorkspace({
 
   const loadConversation =
     useCallback(
-      async (conversationId: number) => {
+      async (
+        conversationId: number,
+      ) => {
+
         setLoadingMessages(true);
         setError("");
+        setAgentActivity(null);
 
         try {
+
           const data =
             await apiFetch<ConversationDetail>(
               `/api/chat/conversations/${conversationId}`,
             );
 
-          setMessages(data.messages);
+          setMessages(
+            data.messages,
+          );
 
           setActiveConversationId(
             data.id,
           );
 
         } catch (err) {
+
           setError(
             err instanceof Error
               ? err.message
@@ -124,11 +177,43 @@ export default function ChatWorkspace({
           );
 
         } finally {
+
           setLoadingMessages(false);
         }
+
       },
       [],
     );
+
+
+  // ==========================================================
+  // RESET TO NEW CHAT
+  // ==========================================================
+
+  const resetToNewChat =
+    useCallback(() => {
+
+      setActiveConversationId(
+        undefined,
+      );
+
+      setMessages([]);
+
+      setAgentActivity(null);
+
+      setError("");
+
+      setLoadingMessages(false);
+
+      /*
+       * A new chat must start without the previous document.
+       */
+      setAttachedDocument(null);
+
+      initialMessageSent.current =
+        false;
+
+    }, []);
 
 
   // ==========================================================
@@ -136,39 +221,83 @@ export default function ChatWorkspace({
   // ==========================================================
 
   useEffect(() => {
-    async function initialize() {
-      try {
-        const data =
-          await loadConversations();
 
-        if (initialConversationId) {
+    let cancelled = false;
+
+    async function initialize() {
+
+      try {
+
+        setLoadingConversations(
+          true,
+        );
+
+        await loadConversations();
+
+        if (cancelled) {
+          return;
+        }
+
+        /*
+         * Existing conversation:
+         * load the requested conversation.
+         *
+         * New chat:
+         * stay completely empty.
+         *
+         * IMPORTANT:
+         * Do NOT automatically open conversations[0].
+         */
+        if (
+          initialConversationId !==
+            undefined &&
+          Number.isFinite(
+            initialConversationId,
+          )
+        ) {
+
           await loadConversation(
             initialConversationId,
           );
 
-        } else if (data.length > 0) {
-          await loadConversation(
-            data[0].id,
-          );
+        } else {
+
+          resetToNewChat();
         }
 
       } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load conversations.",
-        );
+
+        if (!cancelled) {
+
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Unable to load conversations.",
+          );
+        }
 
       } finally {
-        setLoadingConversations(false);
+
+        if (!cancelled) {
+
+          setLoadingConversations(
+            false,
+          );
+        }
       }
     }
 
     void initialize();
+
+    return () => {
+      cancelled = true;
+    };
+
   }, [
     initialConversationId,
     loadConversations,
     loadConversation,
+    resetToNewChat,
   ]);
 
 
@@ -177,6 +306,7 @@ export default function ChatWorkspace({
   // ==========================================================
 
   useEffect(() => {
+
     const element =
       scrollRef.current;
 
@@ -199,9 +329,11 @@ export default function ChatWorkspace({
   // ==========================================================
 
   useEffect(() => {
+
     if (
       !initialMessage ||
-      activeConversationId ||
+      activeConversationId !==
+        undefined ||
       sending ||
       initialMessageSent.current
     ) {
@@ -224,12 +356,72 @@ export default function ChatWorkspace({
 
 
   // ==========================================================
+  // UPLOAD DOCUMENT
+  // ==========================================================
+
+  const uploadDocument =
+    useCallback(
+      async (
+        file: File,
+      ): Promise<UploadedChatDocument> => {
+
+        setError("");
+
+        const formData =
+          new FormData();
+
+        formData.append(
+          "file",
+          file,
+        );
+
+        try {
+
+          const document =
+            await apiUpload<UploadedChatDocument>(
+              "/api/documents/upload",
+              formData,
+            );
+
+          /*
+           * IMPORTANT:
+           *
+           * Store the uploaded document at workspace level.
+           * ChatComposer also displays its own upload chip, while
+           * this state controls which document is sent to /api/chat.
+           */
+          setAttachedDocument(
+            document,
+          );
+
+          return document;
+
+        } catch (err) {
+
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Document upload failed.";
+
+          setError(message);
+
+          throw new Error(
+            message,
+          );
+        }
+      },
+      [],
+    );
+
+
+  // ==========================================================
   // SEND MESSAGE
   // ==========================================================
 
   async function sendMessage(
     message: string,
   ) {
+
     const trimmedMessage =
       message.trim();
 
@@ -255,6 +447,12 @@ export default function ChatWorkspace({
     ]);
 
     try {
+
+      /*
+       * When activeConversationId is undefined,
+       * this is a genuinely NEW conversation.
+       */
+
       const response =
         await apiFetch<ChatResponse>(
           "/api/chat",
@@ -262,38 +460,70 @@ export default function ChatWorkspace({
             method: "POST",
 
             body: JSON.stringify({
-              message: trimmedMessage,
+
+              message:
+                trimmedMessage,
 
               conversation_id:
                 activeConversationId ??
                 null,
+
+              /*
+               * IMPORTANT:
+               *
+               * Send the uploaded document ID to the backend.
+               *
+               * The backend verifies ownership and passes the
+               * document context to the agent.
+               */
+              document_id:
+                attachedDocument?.id ??
+                null,
             }),
           },
         );
+
 
       // ------------------------------------------------------
       // Agent metadata
       // ------------------------------------------------------
 
       if (response.agent) {
+
         setAgentActivity(
           response.agent,
         );
+
       } else {
+
         setAgentActivity(null);
       }
 
+
       // ------------------------------------------------------
-      // Conversation
+      // NEW / EXISTING CONVERSATION
       // ------------------------------------------------------
+
+      const newConversationId =
+        response.conversation_id;
 
       setActiveConversationId(
-        response.conversation_id,
+        newConversationId,
       );
 
+
+      // ------------------------------------------------------
+      // Load updated conversation
+      // ------------------------------------------------------
+
       await loadConversation(
-        response.conversation_id,
+        newConversationId,
       );
+
+
+      // ------------------------------------------------------
+      // Refresh sidebar
+      // ------------------------------------------------------
 
       const conversationData =
         await loadConversations();
@@ -303,6 +533,11 @@ export default function ChatWorkspace({
       );
 
     } catch (err) {
+
+      /*
+       * Remove optimistic message if request failed.
+       */
+
       setMessages((current) =>
         current.filter(
           (item) =>
@@ -322,10 +557,15 @@ export default function ChatWorkspace({
       throw err;
 
     } finally {
+
       setSending(false);
     }
   }
 
+
+  // ==========================================================
+  // RENDER
+  // ==========================================================
 
   return (
     <div className="flex h-[calc(100vh-8rem)] min-h-[620px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -335,14 +575,13 @@ export default function ChatWorkspace({
           ====================================================== */}
 
       <div className="hidden md:flex">
+
         <ConversationList
-          conversations={
-            conversations
-          }
-          activeConversationId={
-            activeConversationId
-          }
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelect={loadConversation}
         />
+
       </div>
 
 
@@ -361,7 +600,11 @@ export default function ChatWorkspace({
           <div className="flex items-center gap-3">
 
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-              <Sparkles size={18} />
+
+              <Sparkles
+                size={18}
+              />
+
             </div>
 
             <div>
@@ -371,7 +614,8 @@ export default function ChatWorkspace({
               </h1>
 
               <p className="text-[11px] text-slate-400">
-                Memory · Documents · Verified actions
+                Memory · Documents · Verified
+                actions
               </p>
 
             </div>
@@ -414,10 +658,16 @@ export default function ChatWorkspace({
 
               {messages.map(
                 (message) => (
+
                   <ChatMessage
-                    key={message.id}
-                    message={message}
+                    key={
+                      message.id
+                    }
+                    message={
+                      message
+                    }
                   />
+
                 ),
               )}
 
@@ -427,11 +677,13 @@ export default function ChatWorkspace({
                   ================================================= */}
 
               {agentActivity && (
+
                 <AgentActivity
                   activity={
                     agentActivity
                   }
                 />
+
               )}
 
 
@@ -440,10 +692,15 @@ export default function ChatWorkspace({
                   ================================================= */}
 
               {sending && (
+
                 <div className="flex items-center gap-3">
 
                   <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white">
-                    <Sparkles size={16} />
+
+                    <Sparkles
+                      size={16}
+                    />
+
                   </div>
 
                   <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3">
@@ -457,7 +714,8 @@ export default function ChatWorkspace({
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:200ms]" />
 
                       <span className="ml-1 text-xs text-slate-400">
-                        ContextAI is working...
+                        ContextAI is
+                        working...
                       </span>
 
                     </div>
@@ -482,6 +740,7 @@ export default function ChatWorkspace({
               {error}
 
             </div>
+
           )}
 
         </div>
@@ -493,6 +752,9 @@ export default function ChatWorkspace({
 
         <ChatComposer
           onSend={sendMessage}
+          onUpload={
+            uploadDocument
+          }
           disabled={
             sending ||
             loadingConversations
@@ -507,7 +769,7 @@ export default function ChatWorkspace({
 
 
 // ============================================================
-// AGENT ACTIVITY COMPONENT
+// AGENT ACTIVITY
 // ============================================================
 
 function AgentActivity({
@@ -515,6 +777,7 @@ function AgentActivity({
 }: {
   activity: AgentMetadata;
 }) {
+
   const toolName =
     activity.tool_name;
 
@@ -527,18 +790,19 @@ function AgentActivity({
     "COMPLETED";
 
 
-  // ----------------------------------------------------------
-  // Verification
-  // ----------------------------------------------------------
-
   if (verificationRequired) {
+
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
 
         <div className="flex items-start gap-3">
 
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-            <ShieldCheck size={18} />
+
+            <ShieldCheck
+              size={18}
+            />
+
           </div>
 
           <div className="min-w-0 flex-1">
@@ -556,15 +820,19 @@ function AgentActivity({
             </div>
 
             <p className="mt-1 text-xs leading-5 text-amber-800">
-              ContextAI prepared this external
-              action, but it will not execute it
-              without your approval.
+              ContextAI prepared this
+              external action, but it
+              will not execute it without
+              your approval.
             </p>
 
             {toolName && (
+
               <div className="mt-3 flex items-center gap-2 text-xs text-amber-900">
 
-                <Wrench size={13} />
+                <Wrench
+                  size={13}
+                />
 
                 <span>
                   {formatToolName(
@@ -573,13 +841,20 @@ function AgentActivity({
                 </span>
 
               </div>
+
             )}
 
             {activity.verification_action_id && (
+
               <div className="mt-2 text-xs text-amber-700">
+
                 Verification action #
-                {activity.verification_action_id}
+                {
+                  activity.verification_action_id
+                }
+
               </div>
+
             )}
 
           </div>
@@ -591,37 +866,45 @@ function AgentActivity({
   }
 
 
-  // ----------------------------------------------------------
-  // Tool execution
-  // ----------------------------------------------------------
-
   if (
-    activity.action === "tool" &&
+    activity.action ===
+      "tool" &&
     toolName
   ) {
+
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
 
         <div className="flex items-center gap-3">
 
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+
             <ToolIcon
-              toolName={toolName}
+              toolName={
+                toolName
+              }
             />
+
           </div>
 
           <div className="min-w-0 flex-1">
 
             <p className="text-sm font-medium text-slate-800">
+
               ContextAI used{" "}
+
               {formatToolName(
                 toolName,
               )}
+
             </p>
 
             <p className="mt-0.5 text-xs text-slate-400">
-              Retrieved context and generated
-              the response from tool evidence.
+
+              Retrieved context and
+              generated the response
+              from tool evidence.
+
             </p>
 
           </div>
@@ -637,14 +920,11 @@ function AgentActivity({
   }
 
 
-  // ----------------------------------------------------------
-  // Direct answer
-  // ----------------------------------------------------------
-
   if (
     activity.action ===
     "final_answer"
   ) {
+
     return (
       <div className="flex items-center gap-2 text-xs text-slate-400">
 
@@ -674,40 +954,63 @@ function ToolIcon({
 }: {
   toolName: string;
 }) {
+
   if (
-    toolName.includes("calendar")
+    toolName.includes(
+      "calendar",
+    )
   ) {
+
     return (
-      <CalendarDays size={17} />
+      <CalendarDays
+        size={17}
+      />
     );
   }
 
+
   if (
-    toolName.includes("email") ||
+    toolName.includes(
+      "email",
+    ) ||
     toolName.includes("mail")
   ) {
+
     return (
       <Mail size={17} />
     );
   }
 
+
   if (
-    toolName.includes("memory")
+    toolName.includes(
+      "memory",
+    )
   ) {
+
     return (
       <Search size={17} />
     );
   }
 
+
   if (
-    toolName.includes("document")
+    toolName.includes(
+      "document",
+    )
   ) {
+
     return (
-      <Search size={17} />
+      <FileText
+        size={17}
+      />
     );
   }
 
-  return <Wrench size={17} />;
+
+  return (
+    <Wrench size={17} />
+  );
 }
 
 
@@ -720,19 +1023,27 @@ function StatusBadge({
 }: {
   status: string;
 }) {
+
   const normalized =
     status.toUpperCase();
 
+
   if (
-    normalized === "VERIFIED" ||
-    normalized === "COMPLETED"
+    normalized ===
+      "VERIFIED" ||
+    normalized ===
+      "COMPLETED"
   ) {
+
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-1 text-[10px] font-medium text-green-700">
 
-        <CheckCircle2 size={11} />
+        <CheckCircle2
+          size={11}
+        />
 
-        {normalized === "VERIFIED"
+        {normalized ===
+        "VERIFIED"
           ? "Verified"
           : "Completed"}
 
@@ -740,14 +1051,20 @@ function StatusBadge({
     );
   }
 
+
   if (
-    normalized === "PENDING" ||
-    normalized === "AWAITING_APPROVAL"
+    normalized ===
+      "PENDING" ||
+    normalized ===
+      "AWAITING_APPROVAL"
   ) {
+
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700">
 
-        <Clock3 size={11} />
+        <Clock3
+          size={11}
+        />
 
         Approval pending
 
@@ -755,16 +1072,23 @@ function StatusBadge({
     );
   }
 
+
   if (
-    normalized === "FAILED" ||
-    normalized === "REJECTED"
+    normalized ===
+      "FAILED" ||
+    normalized ===
+      "REJECTED"
   ) {
+
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700">
 
-        <XCircle size={11} />
+        <XCircle
+          size={11}
+        />
 
-        {normalized === "REJECTED"
+        {normalized ===
+        "REJECTED"
           ? "Rejected"
           : "Failed"}
 
@@ -772,12 +1096,17 @@ function StatusBadge({
     );
   }
 
+
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">
 
-      <Clock3 size={11} />
+      <Clock3
+        size={11}
+      />
 
-      {formatStatus(status)}
+      {formatStatus(
+        status,
+      )}
 
     </span>
   );
@@ -791,10 +1120,16 @@ function StatusBadge({
 function formatToolName(
   toolName: string,
 ): string {
+
   return toolName
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (character) =>
-      character.toUpperCase(),
+    .replace(
+      /_/g,
+      " ",
+    )
+    .replace(
+      /\b\w/g,
+      (character) =>
+        character.toUpperCase(),
     );
 }
 
@@ -802,10 +1137,16 @@ function formatToolName(
 function formatStatus(
   status: string,
 ): string {
+
   return status
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (character) =>
-      character.toUpperCase(),
+    .replace(
+      /_/g,
+      " ",
+    )
+    .replace(
+      /\b\w/g,
+      (character) =>
+        character.toUpperCase(),
     );
 }
 
@@ -815,23 +1156,35 @@ function formatStatus(
 // ============================================================
 
 function EmptyChat() {
+
   return (
     <div className="flex h-full items-center justify-center">
 
       <div className="max-w-md text-center">
 
         <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-          <Sparkles size={25} />
+
+          <Sparkles
+            size={25}
+          />
+
         </div>
 
         <h2 className="mt-5 text-xl font-bold text-slate-900">
-          What can I help you with?
+
+          What can I help you
+          with?
+
         </h2>
 
         <p className="mt-2 text-sm leading-6 text-slate-500">
-          Ask questions, continue previous work,
-          search your persistent context, or work
-          with information you have already shared.
+
+          Ask questions, continue
+          previous work, search your
+          persistent context, or attach
+          a document to give ContextAI
+          new knowledge.
+
         </p>
 
       </div>

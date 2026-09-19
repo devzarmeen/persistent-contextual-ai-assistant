@@ -33,22 +33,12 @@ from app.config import settings
 
 PRIMARY_MODEL = "gemini-3.8-flash"
 
-# Fallback order:
-#
-#   3.8 Flash
-#       ↓
-#   3.6 Flash
-#       ↓
-#   3.5 Flash
-#
 FALLBACK_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
 ]
 
-# Only temporary availability errors should be retried.
-# A quota-exhausted 429 switches immediately to the next model.
 RETRYABLE_503_CODES = {
     500,
     502,
@@ -107,11 +97,55 @@ Examples:
 
 3. get_document
 ------------------------------------------------------------
-Use this when the user refers to a specific document and wants
-the document's full content or detailed contents.
+Use this when the user refers to ONE SPECIFIC DOCUMENT and
+wants its content, summary, analysis, explanation, important
+points, or detailed information.
 
-Use the document ID when the user provides or when conversation
-context contains a valid document ID.
+Examples:
+- "Analyze this document."
+- "Analyze this PDF."
+- "Summarize this document."
+- "What is in this file?"
+- "Is document mein kya hai?"
+- "Is PDF ko explain karo."
+- "Is mein important points batao."
+- "What are the key points in this attachment?"
+
+IMPORTANT ATTACHED-DOCUMENT RULE:
+
+If the application provides an ATTACHED DOCUMENT CONTEXT,
+that document ID is trusted application context.
+
+When the user's current message refers to:
+- this document
+- this file
+- this PDF
+- this attachment
+- it
+- this
+- is document ko
+- is file ko
+- is PDF ko
+- is mein
+- is document ka
+- is file ka
+- analyze this
+- summarize this
+- explain this
+
+then use get_document with EXACTLY the attached document ID.
+
+Do NOT ask the user for a document ID.
+
+Do NOT invent another document ID.
+
+Do NOT use search_documents when the user clearly refers
+to the currently attached document.
+
+If the user explicitly provides a different document ID,
+use that explicit ID only when it is validly present in the
+conversation context and not contradicted by application
+attachment context.
 
 Never invent a document ID.
 
@@ -332,10 +366,6 @@ Never invent:
 Conversation history is context, but it is NOT automatically
 verified truth.
 
-If the user asks about a specific external object and the
-required identifier is not available, ask for clarification
-instead of inventing an identifier.
-
 Do not expose your reasoning process.
 
 Do not return markdown.
@@ -357,6 +387,9 @@ Memory:
 Documents:
 - "Search my documents for X." → search_documents
 - "Show the contents of document 12." → get_document
+- "Analyze this attached document." → get_document
+- "Summarize this PDF." → get_document
+- "Is document mein kya hai?" → get_document
 
 Email:
 - "Find emails about X." → search_emails
@@ -444,8 +477,6 @@ def _parse_agent_decision(
 ) -> AgentDecision:
     cleaned = text.strip()
 
-    # Safety handling in case Gemini returns JSON
-    # inside markdown code fences.
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
 
@@ -479,15 +510,6 @@ def _agent_decision_schema() -> dict[str, Any]:
 
 
 def _tool_arguments_schema() -> dict[str, Any]:
-    """
-    Return the authoritative schemas for all supported tool
-    argument models.
-
-    ToolArguments is a typing.Union, so it does not itself expose
-    model_json_schema(). The individual Pydantic argument models
-    provide the authoritative schemas.
-    """
-
     return {
         "SearchMemoryArguments": (
             SearchMemoryArguments.model_json_schema()
@@ -535,13 +557,171 @@ def _tool_arguments_schema() -> dict[str, Any]:
 
 
 # ============================================================
+# ATTACHED DOCUMENT HELPERS
+# ============================================================
+
+def _looks_like_attached_document_request(
+    user_message: str,
+) -> bool:
+    """
+    Detect whether the user is referring to the currently
+    attached document.
+
+    This deterministic check is intentionally used before the
+    Gemini decision call so phrases such as:
+
+        "es document ko analyze karo"
+        "is mein kya hai"
+        "summarize this PDF"
+        "analyze this attachment"
+
+    cannot accidentally become a final_answer request.
+    """
+
+    normalized = (
+        user_message
+        .strip()
+        .lower()
+    )
+
+    if not normalized:
+        return False
+
+    direct_phrases = [
+        # English
+        "this document",
+        "this file",
+        "this pdf",
+        "this attachment",
+        "attached document",
+        "attached file",
+        "attached pdf",
+        "analyze this",
+        "analyse this",
+        "analyze the document",
+        "analyse the document",
+        "analyze the file",
+        "analyse the file",
+        "summarize this",
+        "summarise this",
+        "summarize the document",
+        "summarise the document",
+        "summarize the file",
+        "summarise the file",
+        "explain this document",
+        "explain this file",
+        "what is in this",
+        "what's in this",
+        "what is in the document",
+        "what's in the document",
+        "key points of this",
+        "important points of this",
+
+        # Roman Urdu
+        "is document ko",
+        "iss document ko",
+        "es document ko",
+        "is document ka",
+        "iss document ka",
+        "es document ka",
+        "is file ko",
+        "iss file ko",
+        "es file ko",
+        "is file ka",
+        "iss file ka",
+        "es file ka",
+        "is pdf ko",
+        "iss pdf ko",
+        "es pdf ko",
+        "is pdf ka",
+        "iss pdf ka",
+        "es pdf ka",
+        "is mein",
+        "iss mein",
+        "es mein",
+        "is me",
+        "iss me",
+        "es me",
+        "is attachment ko",
+        "iss attachment ko",
+        "es attachment ko",
+        "document analyze karo",
+        "document analyse karo",
+        "file analyze karo",
+        "file analyse karo",
+        "pdf analyze karo",
+        "pdf analyse karo",
+        "document summarize karo",
+        "document summarise karo",
+        "file summarize karo",
+        "file summarise karo",
+        "pdf summarize karo",
+        "pdf summarise karo",
+    ]
+
+    return any(
+        phrase in normalized
+        for phrase in direct_phrases
+    )
+
+
+def _build_attached_document_context(
+    attached_document_id: int | None,
+) -> str:
+    if attached_document_id is None:
+        return """
+============================================================
+ATTACHED DOCUMENT CONTEXT
+============================================================
+
+No document is attached to the current message.
+"""
+
+    return f"""
+============================================================
+ATTACHED DOCUMENT CONTEXT
+============================================================
+
+The user has attached a document to the CURRENT message.
+
+Document ID:
+{attached_document_id}
+
+This document ID was supplied by the application.
+It is trusted application context.
+
+If the user's current request refers to the attached document,
+file, PDF, attachment, "this", "it", "is document ko",
+"is file ko", "is mein", or asks for analysis, summary,
+explanation, important points, or contents:
+
+USE get_document WITH EXACTLY THIS DOCUMENT ID:
+
+{attached_document_id}
+
+Do NOT invent another document ID.
+
+Do NOT ask the user for a document ID.
+
+Do NOT use search_documents for the clearly attached document.
+
+The application has already authenticated and verified that
+this document belongs to the current user.
+"""
+
+
+# ============================================================
 # ERROR HELPERS
 # ============================================================
 
 def _get_status_code(
     exc: Exception,
 ) -> int | None:
-    status_code = getattr(exc, "code", None)
+    status_code = getattr(
+        exc,
+        "code",
+        None,
+    )
 
     if isinstance(status_code, int):
         return status_code
@@ -642,13 +822,11 @@ def _request_decision_from_model(
                 f"{MAX_RETRIES_FOR_TEMPORARY_ERROR}"
             )
 
-            # Retry temporary 5xx errors.
             if (
                 _is_temporary_server_error(exc)
                 and attempt
                 < MAX_RETRIES_FOR_TEMPORARY_ERROR
             ):
-
                 wait_seconds = 2 ** (attempt - 1)
 
                 print(
@@ -670,8 +848,6 @@ def _request_decision_from_model(
 
             status_code = _get_status_code(exc)
 
-            # 429 quota exhaustion:
-            # immediately switch to the next model.
             if _is_quota_error(exc):
 
                 print(
@@ -685,13 +861,11 @@ def _request_decision_from_model(
                     f"{type(exc).__name__}: {exc}"
                 ) from exc
 
-            # Retry other temporary API errors.
             if (
                 _is_temporary_server_error(exc)
                 and attempt
                 < MAX_RETRIES_FOR_TEMPORARY_ERROR
             ):
-
                 wait_seconds = 2 ** (attempt - 1)
 
                 print(
@@ -737,31 +911,17 @@ def _request_decision_from_model(
 def decide_next_action(
     user_message: str,
     conversation_history: str = "",
+    attached_document_id: int | None = None,
 ) -> AgentDecision:
 
     """
     Decide whether the current user request should be answered
     directly or handled through one ContextAI tool.
 
-    MODEL FALLBACK:
-
-        gemini-3.8-flash
-                ↓
-        gemini-3.6-flash
-                ↓
-        gemini-3.5-flash
-
-    Behavior:
-
-        429 quota error
-            -> immediately switch model
-
-        503 / temporary 5xx
-            -> retry current model
-            -> then switch model
-
-        successful response
-            -> return validated AgentDecision
+    Attached-document requests are deterministically routed to
+    get_document before Gemini is consulted. This prevents the
+    model from asking for an ID when the frontend has already
+    supplied one.
     """
 
     user_message = user_message.strip()
@@ -776,6 +936,33 @@ def decide_next_action(
             "No previous conversation messages."
         )
 
+    # ========================================================
+    # DETERMINISTIC ATTACHED DOCUMENT ROUTING
+    # ========================================================
+
+    if (
+        attached_document_id is not None
+        and _looks_like_attached_document_request(
+            user_message
+        )
+    ):
+        print(
+            "Attached document request detected. "
+            f"Forcing get_document for document_id="
+            f"{attached_document_id}"
+        )
+
+        return AgentDecision(
+            action="tool",
+            tool_call={
+                "tool_name": "get_document",
+                "arguments": {
+                    "document_id": attached_document_id,
+                },
+            },
+            answer=None,
+        )
+
     client = get_gemini_client()
 
     tool_schema = json.dumps(
@@ -784,8 +971,16 @@ def decide_next_action(
         default=str,
     )
 
+    attached_document_context = (
+        _build_attached_document_context(
+            attached_document_id
+        )
+    )
+
     prompt = f"""
 {AGENT_DECISION_INSTRUCTION}
+
+{attached_document_context}
 
 ============================================================
 AUTHORITATIVE TOOL ARGUMENT SCHEMAS
@@ -818,6 +1013,8 @@ IMPORTANT:
 - Do not explain your decision.
 - Do not expose reasoning.
 - Do not invent identifiers or missing information.
+- If an attached document is clearly referenced, use its trusted
+  application-provided document ID.
 - Return JSON only.
 """
 
@@ -873,10 +1070,6 @@ IMPORTANT:
                     f"to fallback model "
                     f"{next_model}..."
                 )
-
-    # --------------------------------------------------------
-    # All models failed.
-    # --------------------------------------------------------
 
     if last_error is not None:
 

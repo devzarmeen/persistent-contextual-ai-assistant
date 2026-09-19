@@ -74,9 +74,13 @@ class MemoryConflict(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(
+            timezone.utc
+        )
     )
 
     resolved_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(
+            timezone.utc
+        )
     )

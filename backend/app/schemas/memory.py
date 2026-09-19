@@ -15,6 +15,10 @@ MemoryType = Literal[
     "CONVERSATION",
 ]
 
+class MemoryComparison(BaseModel):
+    comparison_type: str
+    conflict_type: str = "NONE"
+    explanation: str
 
 class ExtractedMemory(BaseModel):
     memory_type: MemoryType

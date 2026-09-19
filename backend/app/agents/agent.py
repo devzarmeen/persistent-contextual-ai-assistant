@@ -4,12 +4,17 @@ from typing import Any
 from google import genai
 from google.genai import errors
 from google.genai import types
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.agents.decision import decide_next_action
-from app.agents.models import AgentDecision
+from app.agents.models import (
+    AgentDecision,
+    GetDocumentArguments,
+    ToolCall,
+)
 from app.agents.runner import run_tool
 from app.config import settings
+from app.models.document import Document
 from app.models.message import Message
 from app.verification.services import requires_approval
 
@@ -56,12 +61,16 @@ IMPORTANT RULES
 - Answer the user's actual question.
 - Use the tool result as the source of truth for retrieved
   information.
+- For document requests, use the retrieved document content
+  as the factual source.
 - Do not invent information that is not present in the tool
   result or conversation context.
 - Do not expose internal agent reasoning.
 - Do not mention model selection, fallback models, quotas,
   API errors, or internal implementation details.
 - If the tool returned no useful information, say so clearly.
+- If the tool result contains document content, analyze or
+  summarize that content according to the user's request.
 - If the tool result contains several relevant memories,
   summarize them naturally.
 - Keep the answer concise but useful.
@@ -378,6 +387,19 @@ Generate the final response to the user.
 
 Use the tool result as factual evidence.
 
+If the tool used was get_document:
+
+- Treat the returned document content as the source of truth.
+- Analyze the actual document content.
+- Answer the user's request directly.
+- If they asked for a summary, summarize the document.
+- If they asked for important points, identify important points.
+- If they asked what the document contains, explain its contents.
+- Do not ask the user for the document ID because the document
+  has already been retrieved.
+- Do not say that no document was provided if the tool result
+  contains document content.
+
 Do not mention internal implementation details.
 
 Do not mention Gemini.
@@ -609,6 +631,20 @@ def _verification_pending_response(
 
         action_description = "calendar event"
 
+    elif (
+        tool_call.tool_name
+        == "update_calendar_event"
+    ):
+
+        action_description = "calendar event update"
+
+    elif (
+        tool_call.tool_name
+        == "delete_calendar_event"
+    ):
+
+        action_description = "calendar event deletion"
+
     else:
 
         action_description = "external action"
@@ -644,6 +680,29 @@ def _verification_pending_response(
 
 
 # ============================================================
+# ATTACHED DOCUMENT OWNERSHIP CHECK
+# ============================================================
+
+def _get_attached_document(
+    session: Session,
+    user_id: int,
+    document_id: int,
+) -> Document | None:
+
+    statement = (
+        select(Document)
+        .where(
+            Document.id == document_id,
+            Document.user_id == user_id,
+        )
+    )
+
+    return session.exec(
+        statement
+    ).first()
+
+
+# ============================================================
 # MAIN AGENT
 # ============================================================
 
@@ -652,6 +711,7 @@ def run_agent(
     user_id: int,
     user_message: str,
     conversation_history: list[Message] | None = None,
+    attached_document_id: int | None = None,
 ) -> dict[str, Any]:
 
     user_message = user_message.strip()
@@ -673,6 +733,45 @@ def run_agent(
             },
         }
 
+    # ========================================================
+    # VERIFY ATTACHED DOCUMENT OWNERSHIP
+    # ========================================================
+
+    if attached_document_id is not None:
+
+        attached_document = _get_attached_document(
+            session=session,
+            user_id=user_id,
+            document_id=attached_document_id,
+        )
+
+        if not attached_document:
+
+            return {
+                "success": False,
+                "answer": (
+                    "The attached document could not be found "
+                    "or you do not have access to it."
+                ),
+                "decision": None,
+                "tool_result": None,
+                "agent": {
+                    "action": None,
+                    "tool_name": None,
+                    "status": "FAILED",
+                    "verification_required": False,
+                    "verification_action_id": None,
+                    "verification_status": None,
+                },
+            }
+
+        print(
+            "Attached document verified: "
+            f"id={attached_document.id}, "
+            f"filename={attached_document.filename}, "
+            f"user_id={user_id}"
+        )
+
     history = conversation_history or []
 
     conversation_history_text = (
@@ -682,6 +781,9 @@ def run_agent(
     # ========================================================
     # STEP 1
     # Gemini decides whether to use a tool.
+    #
+    # Attached-document requests are deterministically routed
+    # by decision.py to get_document.
     # ========================================================
 
     try:
@@ -691,6 +793,7 @@ def run_agent(
             conversation_history=(
                 conversation_history_text
             ),
+            attached_document_id=attached_document_id,
         )
 
     except Exception as exc:
@@ -761,6 +864,33 @@ def run_agent(
                     None,
                 ),
             }
+
+        # ====================================================
+        # SECURITY:
+        # If an attached document exists and the decision uses
+        # get_document, force the trusted application ID.
+        #
+        # This prevents an LLM-generated document ID from being
+        # used accidentally.
+        # ====================================================
+
+        if (
+            attached_document_id is not None
+            and decision.tool_call.tool_name
+            == "get_document"
+        ):
+
+            decision.tool_call = ToolCall(
+                tool_name="get_document",
+                arguments=GetDocumentArguments(
+                    document_id=attached_document_id
+                ),
+            )
+
+            print(
+                "Using verified attached document ID: "
+                f"{attached_document_id}"
+            )
 
         # ====================================================
         # Execute tool / create verification action.

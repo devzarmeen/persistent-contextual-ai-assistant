@@ -87,7 +87,9 @@ class MemoryConflictResponse(BaseModel):
     resolved_at: datetime
 
 
-class MemoryConflictDetailResponse(MemoryConflictResponse):
+class MemoryConflictDetailResponse(
+    MemoryConflictResponse
+):
     old_memory: dict
     new_memory: dict
     winning_memory: dict
